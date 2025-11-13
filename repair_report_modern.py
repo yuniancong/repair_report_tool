@@ -49,12 +49,12 @@ except ImportError:
 
 # Drag and drop
 DRAG_DROP_AVAILABLE = False
+DND_FILES = None
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
-    import tkinterdnd2 as _tkdnd_pkg
     DRAG_DROP_AVAILABLE = True
 except ImportError:
-    _tkdnd_pkg = None
+    pass
 
 
 class ModernRepairTool(ctk.CTk):
@@ -510,62 +510,79 @@ class ModernRepairTool(ctk.CTk):
             return
 
         try:
-            # CustomTkinter is built on top of tkinter
-            # We need to manually initialize TkDND for the window
+            # Manually add TkinterDnD functionality to the CustomTkinter window
+            # This is a workaround since CustomTkinter doesn't inherit from TkinterDnD.Tk
             from tkinterdnd2 import _dnd_init
 
-            # Initialize DnD for the root window
-            try:
-                _dnd_init(self, self)
-            except:
-                # Alternative: try using the TkinterDnD method directly
-                pass
+            # Initialize DnD for this window
+            TkinterDnD.DnDWrapper = TkinterDnD.Tk
+            # Patch the window to support DnD
+            self.tk.eval('package require tkdnd')
 
-            # Try to register drag and drop
-            # For CustomTkinter, we need to use the underlying tk methods
-            if hasattr(self, 'drop_target_register'):
-                self.drop_target_register(DND_FILES)
-                self.dnd_bind('<<Drop>>', self.on_drop)
-            else:
-                # Manual DnD setup for CustomTkinter
-                self.tk.call('dnd', 'bindtarget', str(self), DND_FILES,
-                            '<<Drop>>', self.register(self._dnd_drop_wrapper))
+            # Add the necessary methods to our window
+            def drop_target_register(widget, *args):
+                widget.tk.call('dnd', 'bindtarget', widget, *args)
 
-            # Also try to register on the image gallery's underlying widget
-            # Wait for the widget to be created
-            self.after(100, self._register_image_gallery_drop)
+            def dnd_bind(widget, sequence, func, add=''):
+                widget.bind(sequence, func, add)
+
+            # Monkey-patch these methods onto our window
+            self.drop_target_register = lambda *args: drop_target_register(self, *args)
+            self.dnd_bind = lambda *args, **kw: dnd_bind(self, *args, **kw)
+
+            # Register the main window for drag and drop
+            self.drop_target_register(DND_FILES)
+            self.dnd_bind('<<Drop>>', self.on_drop)
+
+            # Also register on specific widgets after they're created
+            self.after(200, self._register_widget_drops)
 
             print("✅ 拖拽功能设置成功")
         except Exception as e:
             print(f"⚠️ 拖拽功能设置失败: {e}")
             import traceback
             traceback.print_exc()
-            # Don't fail completely, just disable drag-drop
 
-    def _dnd_drop_wrapper(self, *args):
-        """Wrapper for DnD drop event"""
-        # Create a simple event object
-        class DropEvent:
-            def __init__(self, data):
-                self.data = data
-
-        if args:
-            event = DropEvent(args[0] if args else "")
-            self.on_drop(event)
-
-    def _register_image_gallery_drop(self):
-        """Register drop on image gallery after it's created"""
+    def _register_widget_drops(self):
+        """Register drop on specific widgets after they're created"""
         try:
-            if hasattr(self.image_gallery, 'drop_target_register'):
-                self.image_gallery.drop_target_register(DND_FILES)
-                self.image_gallery.dnd_bind('<<Drop>>', self.on_drop)
-            else:
-                # Try manual registration
-                gallery_widget = self.image_gallery
-                self.tk.call('dnd', 'bindtarget', str(gallery_widget), DND_FILES,
-                           '<<Drop>>', self.register(self._dnd_drop_wrapper))
+            # Create helper functions for widget drop registration
+            def register_widget_drop(widget):
+                try:
+                    widget.tk.call('dnd', 'bindtarget', widget, DND_FILES)
+                    widget.bind('<<Drop>>', self.on_drop, add='+')
+                    return True
+                except:
+                    return False
+
+            # Try to register on the main frame widgets
+            widgets_to_register = []
+
+            # Add drop zone
+            if hasattr(self, 'drop_zone') and self.drop_zone:
+                widgets_to_register.append(self.drop_zone)
+
+            # Add image gallery
+            if hasattr(self, 'image_gallery') and self.image_gallery:
+                widgets_to_register.append(self.image_gallery)
+
+            # Register each widget
+            success_count = 0
+            for widget in widgets_to_register:
+                if register_widget_drop(widget):
+                    success_count += 1
+
+                # Also try to register internal frames
+                if hasattr(widget, '_canvas'):
+                    register_widget_drop(widget._canvas)
+                if hasattr(widget, '_parent_canvas'):
+                    register_widget_drop(widget._parent_canvas)
+
+            print(f"✅ 成功注册 {success_count} 个拖拽区域")
         except Exception as e:
-            pass  # Silently fail
+            print(f"⚠️ Widget 拖拽注册失败: {e}")
+            import traceback
+            traceback.print_exc()
 
     def on_drop(self, event):
         """Handle drag and drop of image files"""
