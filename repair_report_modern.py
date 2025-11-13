@@ -518,43 +518,59 @@ class ModernRepairTool(ctk.CTk):
             self.tk.eval('package require tkdnd')
             self._log_debug("✓ tkdnd 包已加载")
 
-            # Manually add drop_target_register and dnd_bind methods
-            # This makes CustomTkinter behave like TkinterDnD.Tk
-            def drop_target_register(*args):
-                """Register a widget as a drop target"""
-                try:
-                    # args[0] is self (the window), args[1:] are the DND types
-                    self.tk.call('::tkdnd::drop_target', 'register', self._w, *args[1:])
-                    self._log_debug(f"✓ 注册拖拽目标: {self._w}")
-                except Exception as e:
-                    self._log_debug(f"✗ 注册拖拽目标失败: {e}")
-                    raise
+            # Register the window as a drop target
+            self.tk.call('::tkdnd::drop_target', 'register', self._w, DND_FILES)
+            self._log_debug(f"✓ 注册拖拽目标: {self._w}")
 
-            def dnd_bind(sequence, func, add=None):
-                """Bind a DND event to a function"""
-                try:
-                    # Use Python's native bind method
-                    if add:
-                        self.bind(sequence, func, add)
-                    else:
-                        self.bind(sequence, func)
-                    self._log_debug(f"✓ 绑定事件: {sequence}")
-                except Exception as e:
-                    self._log_debug(f"✗ 绑定事件失败: {e}")
-                    raise
+            # Create Python callbacks that will be called from Tcl
+            def on_drop_wrapper(data):
+                """Wrapper for drop event that gets called from Tcl"""
+                self._log_debug(f"🎯 Drop wrapper 被调用: {data}")
+                # Create a mock event object
+                class DropEvent:
+                    def __init__(self, data):
+                        self.data = data
+                self.on_drop(DropEvent(data))
+                return 'copy'
 
-            # Attach these methods to the instance
-            self.drop_target_register = drop_target_register
-            self.dnd_bind = dnd_bind
+            def on_drop_enter(action, types):
+                """Wrapper for drop enter event"""
+                self._log_debug(f"👋 Drop Enter: action={action}, types={types}")
+                return 'copy'
 
-            # Register the window for file drops
-            self.drop_target_register(DND_FILES)
+            def on_drop_position(x, y, action):
+                """Wrapper for drop position event"""
+                self._log_debug(f"📍 Drop Position: x={x}, y={y}, action={action}")
+                return 'copy'
 
-            # Bind the drop event
-            self.dnd_bind('<<Drop>>', self.on_drop, '+')
-            self.dnd_bind('<<DropEnter>>', lambda e: 'copy', '+')
-            self.dnd_bind('<<DropPosition>>', lambda e: 'copy', '+')
-            self.dnd_bind('<<DropLeave>>', lambda e: None, '+')
+            def on_drop_leave():
+                """Wrapper for drop leave event"""
+                self._log_debug(f"👋 Drop Leave")
+                return None
+
+            # Register the Python callbacks with Tcl
+            drop_cmd = self.register(on_drop_wrapper, str)
+            drop_enter_cmd = self.register(on_drop_enter, str, str)
+            drop_position_cmd = self.register(on_drop_position, int, int, str)
+            drop_leave_cmd = self.register(on_drop_leave)
+
+            # Use Tcl script to bind the events
+            # This is more reliable than Python's bind() on macOS
+            self.tk.eval(f'''
+                bind {self._w} <<Drop>> {{
+                    {drop_cmd} %D
+                }}
+                bind {self._w} <<DropEnter>> {{
+                    {drop_enter_cmd} %A %t
+                }}
+                bind {self._w} <<DropPosition>> {{
+                    {drop_position_cmd} %X %Y %A
+                }}
+                bind {self._w} <<DropLeave>> {{
+                    {drop_leave_cmd}
+                }}
+            ''')
+            self._log_debug("✓ 使用 Tcl 脚本绑定所有拖拽事件")
 
             # Also register on specific widgets after they're created
             self.after(200, self._register_widget_drops)
