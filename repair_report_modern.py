@@ -7,6 +7,7 @@ RepoPrompt-inspired glassmorphism design with semi-transparent effects
 
 import customtkinter as ctk
 from tkinter import filedialog, messagebox, scrolledtext
+import tkinter as tk
 from PIL import Image, ImageTk, ImageFilter, ImageDraw
 import os
 import json
@@ -17,10 +18,10 @@ import uuid
 import platform
 import sys
 import glob
-import threading
+import re
 
 # Set appearance mode and color theme
-ctk.set_appearance_mode("dark")  # Modes: "System", "Dark", "Light"
+ctk.set_appearance_mode("light")  # Light mode only
 ctk.set_default_color_theme("blue")  # Themes: "blue", "green", "dark-blue"
 
 # Excel export
@@ -66,9 +67,9 @@ class ModernRepairTool(ctk.CTk):
         self.title("维修单工具 Modern Edition v2.0")
         self.geometry("1600x1000")
 
-        # Try to set window transparency (works on Windows/macOS)
+        # Set window transparency for glassmorphism effect
         try:
-            self.attributes('-alpha', 0.98)
+            self.attributes('-alpha', 0.96)  # Slightly more transparent for light theme
         except:
             pass
 
@@ -83,25 +84,27 @@ class ModernRepairTool(ctk.CTk):
         self.image_cache = {}
         self.thumbnail_cache = {}
 
-        # Color scheme - RepoPrompt inspired
+        # Color scheme - Light and transparent
         self.colors = {
-            'bg_primary': '#0D1117',      # Dark background
-            'bg_secondary': '#161B22',    # Slightly lighter
-            'bg_tertiary': '#21262D',     # Even lighter
-            'accent': '#58A6FF',          # Blue accent
-            'accent_hover': '#79C0FF',    # Lighter blue
-            'text_primary': '#F0F6FC',    # White text
-            'text_secondary': '#8B949E',  # Gray text
-            'border': '#30363D',          # Border color
-            'success': '#3FB950',         # Green
-            'warning': '#D29922',         # Orange
-            'error': '#F85149',           # Red
-            'glass': 'rgba(255, 255, 255, 0.1)'  # Glassmorphism
+            'bg_primary': '#F8F9FA',      # Light gray background
+            'bg_secondary': '#FFFFFF',    # White
+            'bg_tertiary': '#E9ECEF',     # Slightly gray
+            'accent': '#0D6EFD',          # Blue accent
+            'accent_hover': '#0B5ED7',    # Darker blue
+            'text_primary': '#212529',    # Dark text
+            'text_secondary': '#6C757D',  # Gray text
+            'border': '#DEE2E6',          # Light border
+            'success': '#198754',         # Green
+            'warning': '#FFC107',         # Orange/Yellow
+            'error': '#DC3545',           # Red
+            'glass': 'rgba(255, 255, 255, 0.8)'  # Light glassmorphism
         }
 
         # Initialize UI
+        self.create_menu()  # Add menu first
         self.setup_ui()
         self.setup_drag_drop()
+        self.bind_shortcuts()  # Add keyboard shortcuts
 
     def setup_ui(self):
         """Setup the modern UI layout"""
@@ -157,12 +160,27 @@ class ModernRepairTool(ctk.CTk):
         title_input_frame = ctk.CTkFrame(top_frame, fg_color="transparent")
         title_input_frame.grid(row=0, column=1, sticky="ew", padx=40, pady=15)
 
+        title_label_frame = ctk.CTkFrame(title_input_frame, fg_color="transparent")
+        title_label_frame.pack(fill="x", pady=(0, 5))
+
         ctk.CTkLabel(
-            title_input_frame,
+            title_label_frame,
             text="项目标题",
             font=ctk.CTkFont(size=12),
             text_color=self.colors['text_secondary']
-        ).pack(anchor="w", pady=(0, 5))
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            title_label_frame,
+            text="快速填充",
+            width=80,
+            height=24,
+            corner_radius=6,
+            font=ctk.CTkFont(size=11),
+            fg_color=self.colors['accent'],
+            hover_color=self.colors['accent_hover'],
+            command=self.quick_fill_title
+        ).pack(side="right")
 
         self.title_entry = ctk.CTkEntry(
             title_input_frame,
@@ -245,8 +263,36 @@ class ModernRepairTool(ctk.CTk):
         ).pack(side="left")
 
         # Add button
-        add_btn = ctk.CTkButton(
-            header,
+        # Control buttons
+        btn_group = ctk.CTkFrame(header, fg_color="transparent")
+        btn_group.pack(side="right")
+
+        ctk.CTkButton(
+            btn_group,
+            text="↑",
+            width=32,
+            height=32,
+            corner_radius=8,
+            font=ctk.CTkFont(size=14, weight="bold"),
+            fg_color=self.colors['bg_tertiary'],
+            hover_color=self.colors['border'],
+            command=self.move_item_up
+        ).pack(side="left", padx=2)
+
+        ctk.CTkButton(
+            btn_group,
+            text="↓",
+            width=32,
+            height=32,
+            corner_radius=8,
+            font=ctk.CTkFont(size=14, weight="bold"),
+            fg_color=self.colors['bg_tertiary'],
+            hover_color=self.colors['border'],
+            command=self.move_item_down
+        ).pack(side="left", padx=2)
+
+        ctk.CTkButton(
+            btn_group,
             text="+ 添加",
             width=80,
             height=32,
@@ -255,8 +301,7 @@ class ModernRepairTool(ctk.CTk):
             fg_color=self.colors['accent'],
             hover_color=self.colors['accent_hover'],
             command=self.add_item
-        )
-        add_btn.pack(side="right")
+        ).pack(side="left", padx=2)
 
         # Search bar
         self.search_entry = ctk.CTkEntry(
@@ -641,22 +686,265 @@ class ModernRepairTool(ctk.CTk):
             self.show_batch_assign_dialog(list(file_paths))
 
     def show_batch_assign_dialog(self, file_paths):
-        """Show dialog to assign multiple images to items"""
-        # Simple implementation: assign all to selected item
-        if self.selected_item_index is not None:
-            item = self.items[self.selected_item_index]
-            added = 0
-            for path in file_paths:
-                if path not in item['images']:
-                    item['images'].append(path)
-                    added += 1
+        """Show dialog to assign multiple images to items with full control"""
+        if not file_paths or not self.items:
+            return
 
-            self.refresh_item_list()
-            self.display_item_images(self.selected_item_index)
-            self.update_stats()
-            messagebox.showinfo("完成", f"已添加 {added} 张图片到当前项目")
-        else:
-            messagebox.showwarning("提示", "请先选择一个项目")
+        dialog = ctk.CTkToplevel(self)
+        dialog.title(f"批量分配 {len(file_paths)} 张图片")
+        dialog.geometry("1100x750")
+        dialog.transient(self)
+
+        # Center dialog
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (1100 // 2)
+        y = (dialog.winfo_screenheight() // 2) - (750 // 2)
+        dialog.geometry(f"1100x750+{x}+{y}")
+
+        # Title and quick assign buttons
+        title_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        title_frame.pack(fill="x", padx=20, pady=20)
+
+        ctk.CTkLabel(
+            title_frame,
+            text=f"为 {len(file_paths)} 张图片选择目标项目",
+            font=ctk.CTkFont(size=18, weight="bold")
+        ).pack(side="left")
+
+        quick_frame = ctk.CTkFrame(title_frame, fg_color="transparent")
+        quick_frame.pack(side="right")
+
+        # Store assignments
+        self.assignments = {}
+
+        def quick_assign_first():
+            for var in self.assignments.values():
+                var.set(1)
+            messagebox.showinfo("完成", "已将所有图片分配到第一个项目")
+
+        def quick_assign_even():
+            total = len(self.items)
+            for i, var in enumerate(self.assignments.values()):
+                var.set((i % total) + 1)
+            messagebox.showinfo("完成", f"已将图片平均分配到 {total} 个项目")
+
+        def quick_assign_selected():
+            if self.selected_item_index is not None:
+                idx = self.selected_item_index + 1
+                for var in self.assignments.values():
+                    var.set(idx)
+                messagebox.showinfo("完成", f"已将所有图片分配到项目 {idx}")
+            else:
+                messagebox.showwarning("提示", "请先选择一个项目")
+
+        ctk.CTkButton(
+            quick_frame,
+            text="全部→项目1",
+            command=quick_assign_first,
+            height=32,
+            corner_radius=8
+        ).pack(side="left", padx=2)
+
+        ctk.CTkButton(
+            quick_frame,
+            text="平均分配",
+            command=quick_assign_even,
+            height=32,
+            corner_radius=8
+        ).pack(side="left", padx=2)
+
+        ctk.CTkButton(
+            quick_frame,
+            text="→选中项目",
+            command=quick_assign_selected,
+            height=32,
+            corner_radius=8
+        ).pack(side="left", padx=2)
+
+        # List frame with headers
+        list_container = ctk.CTkFrame(dialog)
+        list_container.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+
+        # Headers
+        header_frame = ctk.CTkFrame(list_container, fg_color=self.colors['bg_tertiary'], height=40)
+        header_frame.pack(fill="x", padx=5, pady=5)
+        header_frame.pack_propagate(False)
+
+        headers_info = [
+            ("序号", 60),
+            ("文件名", 350),
+            ("分配到项目", 180),
+            ("项目描述", 350)
+        ]
+
+        col_x = 10
+        for header_text, width in headers_info:
+            ctk.CTkLabel(
+                header_frame,
+                text=header_text,
+                font=ctk.CTkFont(size=12, weight="bold"),
+                width=width,
+                anchor="w"
+            ).place(x=col_x, y=10)
+            col_x += width + 10
+
+        # Scrollable content
+        scroll_frame = ctk.CTkScrollableFrame(list_container, fg_color="transparent")
+        scroll_frame.pack(fill="both", expand=True, padx=5, pady=(0, 5))
+
+        # Create project options
+        project_options = []
+        for j, item in enumerate(self.items):
+            desc = item['description'][:25] + ("..." if len(item['description']) > 25 else "")
+            project_options.append(f"{j+1}. {desc}")
+
+        # Add row for each file
+        for i, fp in enumerate(file_paths):
+            row_frame = ctk.CTkFrame(scroll_frame, fg_color=self.colors['bg_secondary'], corner_radius=8)
+            row_frame.pack(fill="x", pady=3)
+
+            row_inner = ctk.CTkFrame(row_frame, fg_color="transparent", height=50)
+            row_inner.pack(fill="x", padx=10, pady=8)
+            row_inner.pack_propagate(False)
+
+            # Index
+            ctk.CTkLabel(
+                row_inner,
+                text=str(i+1),
+                width=60,
+                font=ctk.CTkFont(size=11)
+            ).place(x=0, y=12)
+
+            # Filename
+            name = os.path.basename(fp)
+            disp = name if len(name) <= 35 else name[:32] + "..."
+            ctk.CTkLabel(
+                row_inner,
+                text=disp,
+                width=350,
+                anchor="w",
+                font=ctk.CTkFont(size=11)
+            ).place(x=70, y=12)
+
+            # Project selector
+            var = tk.IntVar(value=1)
+            combo = tk.ttk.Combobox(
+                row_inner,
+                width=20,
+                state='readonly',
+                values=project_options,
+                font=('Microsoft YaHei', 10)
+            )
+            combo.set(project_options[0])
+            combo.place(x=430, y=10)
+
+            # Description label
+            desc_label = ctk.CTkLabel(
+                row_inner,
+                text="",
+                width=350,
+                anchor="w",
+                font=ctk.CTkFont(size=10),
+                text_color=self.colors['text_secondary']
+            )
+            desc_label.place(x=620, y=12)
+
+            def update_desc(event=None, v=var, lbl=desc_label, c=combo):
+                try:
+                    sel = c.get()
+                    if sel:
+                        pidx = int(sel.split('.')[0]) - 1
+                        if 0 <= pidx < len(self.items):
+                            v.set(pidx + 1)
+                            d = self.items[pidx]['description']
+                            lbl.configure(text=d[:30] + ("..." if len(d) > 30 else ""))
+                except:
+                    pass
+
+            combo.bind('<<ComboboxSelected>>', update_desc)
+
+            # Set initial description
+            if self.items:
+                first = self.items[0]['description']
+                desc_label.configure(text=first[:30] + ("..." if len(first) > 30 else ""))
+
+            self.assignments[fp] = var
+
+        # Bottom buttons
+        bottom_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        bottom_frame.pack(fill="x", padx=20, pady=20)
+
+        ctk.CTkLabel(
+            bottom_frame,
+            text=f"待分配: {len(file_paths)} 张图片 → {len(self.items)} 个项目",
+            font=ctk.CTkFont(size=12)
+        ).pack(side="left")
+
+        def execute():
+            try:
+                succ = skip = err = 0
+                stats = {}
+                for fp, v in self.assignments.items():
+                    try:
+                        pidx = v.get() - 1
+                        if 0 <= pidx < len(self.items):
+                            if fp not in self.items[pidx]['images']:
+                                self.items[pidx]['images'].append(fp)
+                                succ += 1
+                                key = f"项目{pidx+1}"
+                                stats[key] = stats.get(key, 0) + 1
+                            else:
+                                skip += 1
+                        else:
+                            err += 1
+                    except:
+                        err += 1
+
+                dialog.destroy()
+                self.refresh_item_list()
+                self.update_stats()
+
+                # Refresh display if item is selected
+                if self.selected_item_index is not None and 0 <= self.selected_item_index < len(self.items):
+                    self.display_item_images(self.selected_item_index)
+
+                if succ:
+                    msg = "批量分配完成！\n\n"
+                    msg += f"✅ 成功分配: {succ} 张\n"
+                    if skip:
+                        msg += f"⚠️ 跳过重复: {skip} 张\n"
+                    if err:
+                        msg += f"❌ 分配失败: {err} 张\n"
+                    if stats:
+                        msg += "\n分配详情:\n" + "\n".join([f"  {k}: {v} 张" for k, v in stats.items()])
+                    messagebox.showinfo("批量分配完成", msg)
+                    self.set_status(f"✅ 批量分配完成：{succ} 张成功")
+                else:
+                    messagebox.showwarning("分配结果", "没有成功分配任何图片")
+                    self.set_status("⚠️ 批量分配：无文件被分配")
+            except Exception as e:
+                messagebox.showerror("分配错误", f"批量分配失败:\n{str(e)}")
+                self.set_status("❌ 批量分配失败")
+
+        ctk.CTkButton(
+            bottom_frame,
+            text="取消",
+            command=dialog.destroy,
+            height=40,
+            corner_radius=10,
+            fg_color=self.colors['bg_tertiary'],
+            hover_color=self.colors['border']
+        ).pack(side="right", padx=5)
+
+        ctk.CTkButton(
+            bottom_frame,
+            text="执行分配",
+            command=execute,
+            height=40,
+            corner_radius=10,
+            fg_color=self.colors['success'],
+            hover_color="#0f6e3d"
+        ).pack(side="right", padx=5)
 
     def display_item_images(self, idx):
         """Display images for selected item"""
@@ -800,21 +1088,6 @@ class ModernRepairTool(ctk.CTk):
             font=ctk.CTkFont(size=24, weight="bold")
         ).pack(pady=20)
 
-        # Appearance mode
-        ctk.CTkLabel(
-            dialog,
-            text="外观模式",
-            font=ctk.CTkFont(size=14)
-        ).pack(pady=(20, 5))
-
-        appearance_var = ctk.StringVar(value=ctk.get_appearance_mode())
-        ctk.CTkOptionMenu(
-            dialog,
-            variable=appearance_var,
-            values=["Dark", "Light", "System"],
-            command=lambda mode: ctk.set_appearance_mode(mode)
-        ).pack(pady=5)
-
         # About info
         ctk.CTkLabel(
             dialog,
@@ -910,9 +1183,11 @@ class ModernRepairTool(ctk.CTk):
 
         if path:
             self.set_status("正在导出Excel...")
-            # Use threading to prevent UI freeze
-            thread = threading.Thread(target=self._export_excel_file, args=(path,))
-            thread.start()
+            try:
+                self._export_excel_file(path)
+            except Exception as e:
+                messagebox.showerror("错误", f"导出Excel失败: {str(e)}")
+                self.set_status("✗ Excel导出失败")
 
     def _export_excel_file(self, file_path):
         """Export to Excel file (original implementation)"""
@@ -1043,8 +1318,11 @@ class ModernRepairTool(ctk.CTk):
 
         if path:
             self.set_status("正在导出PDF...")
-            thread = threading.Thread(target=self._export_pdf_file, args=(path,))
-            thread.start()
+            try:
+                self._export_pdf_file(path)
+            except Exception as e:
+                messagebox.showerror("错误", f"导出PDF失败: {str(e)}")
+                self.set_status("✗ PDF导出失败")
 
     def _export_pdf_file(self, file_path):
         """Export to PDF file (original implementation)"""
@@ -1239,6 +1517,385 @@ class ModernRepairTool(ctk.CTk):
                     os.unlink(f)
             except:
                 pass
+
+    def create_menu(self):
+        """Create menu bar with all options"""
+        menubar = tk.Menu(self)
+        self.config(menu=menubar)
+
+        # File menu
+        file_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="文件", menu=file_menu)
+        file_menu.add_command(label="新建项目", command=self.new_project, accelerator="Ctrl+N")
+        file_menu.add_command(label="打开项目", command=self.open_project, accelerator="Ctrl+O")
+        file_menu.add_command(label="保存项目", command=self.save_project, accelerator="Ctrl+S")
+        file_menu.add_separator()
+        if EXCEL_AVAILABLE:
+            file_menu.add_command(label="导出Excel", command=self.export_excel, accelerator="Ctrl+E")
+        if PDF_AVAILABLE:
+            file_menu.add_command(label="导出PDF", command=self.export_pdf, accelerator="Ctrl+P")
+        file_menu.add_separator()
+        file_menu.add_command(label="退出", command=self.quit)
+
+        # Edit menu
+        edit_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="编辑", menu=edit_menu)
+        edit_menu.add_command(label="添加项目", command=self.add_item, accelerator="Ctrl+A")
+        edit_menu.add_command(label="删除项目", command=self.delete_selected_item, accelerator="Delete")
+        edit_menu.add_separator()
+        edit_menu.add_command(label="批量添加图片", command=self.batch_add_images, accelerator="Ctrl+I")
+
+        # View menu
+        view_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="视图", menu=view_menu)
+        view_menu.add_command(label="预览报告", command=self.preview_report)
+        view_menu.add_command(label="刷新", command=self.refresh_display, accelerator="F5")
+
+        # Help menu
+        help_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="帮助", menu=help_menu)
+        help_menu.add_command(label="使用说明", command=self.show_help)
+        help_menu.add_command(label="关于", command=self.show_about)
+
+    def bind_shortcuts(self):
+        """Bind keyboard shortcuts"""
+        self.bind('<Control-n>', lambda e: self.new_project())
+        self.bind('<Control-o>', lambda e: self.open_project())
+        self.bind('<Control-s>', lambda e: self.save_project())
+        self.bind('<Control-e>', lambda e: self.export_excel())
+        self.bind('<Control-p>', lambda e: self.export_pdf())
+        self.bind('<Control-a>', lambda e: self.add_item())
+        self.bind('<Control-i>', lambda e: self.batch_add_images())
+        self.bind('<Delete>', lambda e: self.delete_selected_item())
+        self.bind('<F5>', lambda e: self.refresh_display())
+
+    def new_project(self):
+        """Create new project"""
+        if self.items and messagebox.askyesno("确认", "当前项目未保存，确定要新建项目吗？"):
+            self.items = []
+            self.current_item_id = 0
+            self.project_title_var.set("")
+            self.selected_item_index = None
+            self.refresh_item_list()
+            self.clear_image_display()
+            self.description_entry.delete(0, "end")
+            self.thumbnail_cache.clear()
+            self.update_stats()
+            self.set_status("✓ 已创建新项目")
+        elif not self.items:
+            self.project_title_var.set("")
+            self.set_status("新项目就绪")
+
+    def delete_selected_item(self):
+        """Delete currently selected item"""
+        if self.selected_item_index is not None:
+            self.delete_item(self.selected_item_index)
+        else:
+            messagebox.showwarning("警告", "请先选择要删除的项目")
+
+    def refresh_display(self):
+        """Refresh the display"""
+        self.refresh_item_list()
+        if self.selected_item_index is not None and 0 <= self.selected_item_index < len(self.items):
+            self.display_item_images(self.selected_item_index)
+        self.update_stats()
+        self.set_status("✓ 已刷新显示")
+
+    def preview_report(self):
+        """Preview report content"""
+        if not self.items:
+            messagebox.showwarning("警告", "没有数据可预览")
+            return
+
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("报告预览")
+        dialog.geometry("1000x700")
+        dialog.transient(self)
+
+        # Center dialog
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (1000 // 2)
+        y = (dialog.winfo_screenheight() // 2) - (700 // 2)
+        dialog.geometry(f"1000x700+{x}+{y}")
+
+        # Create text widget
+        text_frame = ctk.CTkFrame(dialog)
+        text_frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+        text = tk.Text(text_frame, wrap="word", font=('Courier', 10), bg='white')
+        scrollbar = ctk.CTkScrollbar(text_frame, command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side="right", fill="y")
+        text.pack(side="left", fill="both", expand=True)
+
+        # Generate content
+        title = self.project_title_var.get() or "维修检查报告"
+        content = f"{'='*60}\n{title:^60}\n{'='*60}\n\n"
+        content += f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        content += f"项目总数: {len(self.items)}\n"
+        content += f"图片总数: {sum(len(it.get('images',[])) for it in self.items)}\n"
+        content += f"工具版本: v2.0.0 Modern Edition\n\n"
+
+        for i, item in enumerate(self.items):
+            content += f"{'-'*60}\n项目 {i+1}: {item['description']}\n{'-'*60}\n"
+            imgs = item.get('images', [])
+            if imgs:
+                content += f"包含图片 ({len(imgs)} 张):\n"
+                for j, p in enumerate(imgs):
+                    try:
+                        size_k = os.path.getsize(p)/1024
+                        with Image.open(p) as im:
+                            info = f"{im.width}×{im.height}"
+                        content += f"  {j+1}. {os.path.basename(p)} ({size_k:.1f}KB, {info})\n"
+                    except:
+                        content += f"  {j+1}. {os.path.basename(p)} (无法读取信息)\n"
+            else:
+                content += "暂无图片\n"
+            content += "\n"
+
+        text.insert("1.0", content)
+        text.config(state="disabled")
+
+    def show_help(self):
+        """Show help dialog"""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("使用说明")
+        dialog.geometry("800x600")
+        dialog.transient(self)
+
+        # Center dialog
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (800 // 2)
+        y = (dialog.winfo_screenheight() // 2) - (600 // 2)
+        dialog.geometry(f"800x600+{x}+{y}")
+
+        # Title
+        ctk.CTkLabel(
+            dialog,
+            text="📖 使用说明",
+            font=ctk.CTkFont(size=24, weight="bold")
+        ).pack(pady=20)
+
+        # Content frame
+        content_frame = ctk.CTkFrame(dialog)
+        content_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+
+        help_text = """
+维修单工具 Modern Edition v2.0 - 使用说明
+
+🎨 界面说明：
+• 左侧面板：显示所有维修项目列表
+• 右侧区域：显示当前选中项目的图片
+• 顶部工具栏：项目标题输入和导出按钮
+
+📝 基本操作：
+1. 创建项目：点击左侧"+ 添加"按钮或使用 Ctrl+A
+2. 编辑描述：选中项目后，在右侧描述框中输入
+3. 添加图片：选中项目后，点击"添加图片"或"批量添加"
+4. 删除项目/图片：点击相应的删除按钮
+
+💾 保存和导出：
+• 保存项目：文件 → 保存项目 (Ctrl+S)
+• 打开项目：文件 → 打开项目 (Ctrl+O)
+• 导出Excel：文件 → 导出Excel (Ctrl+E)
+• 导出PDF：文件 → 导出PDF (Ctrl+P)
+
+⌨️ 快捷键：
+• Ctrl+N：新建项目
+• Ctrl+O：打开项目
+• Ctrl+S：保存项目
+• Ctrl+A：添加项目
+• Ctrl+I：批量添加图片
+• Ctrl+E：导出Excel
+• Ctrl+P：导出PDF
+• Delete：删除选中项目
+• F5：刷新显示
+
+📸 图片支持：
+支持 JPG, PNG, GIF, BMP, TIFF, WEBP 等格式
+
+💡 提示：
+• 导出前请务必填写项目标题
+• 建议定期保存项目文件
+• 图片会自动优化以适应导出格式
+        """
+
+        text_widget = tk.Text(
+            content_frame,
+            wrap="word",
+            font=('Microsoft YaHei', 10),
+            bg='white',
+            padx=20,
+            pady=20
+        )
+        scrollbar = ctk.CTkScrollbar(content_frame, command=text_widget.yview)
+        text_widget.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side="right", fill="y")
+        text_widget.pack(side="left", fill="both", expand=True)
+
+        text_widget.insert("1.0", help_text)
+        text_widget.config(state="disabled")
+
+        # Close button
+        ctk.CTkButton(
+            dialog,
+            text="关闭",
+            command=dialog.destroy,
+            height=40,
+            corner_radius=10
+        ).pack(pady=(0, 20))
+
+    def show_about(self):
+        """Show about dialog"""
+        about_text = f"""维修单工具 Modern Edition v2.0
+
+🎨 明亮透明主题设计
+📊 支持Excel/PDF导出
+🖼️ 智能图片处理
+
+系统：{platform.system()} {platform.release()}
+Python：{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}
+
+功能状态：
+拖拽：{'✅ 可用' if DRAG_DROP_AVAILABLE else '❌ 不可用'}
+Excel：{'✅ 可用' if EXCEL_AVAILABLE else '❌ 不可用'}
+PDF：{'✅ 可用' if PDF_AVAILABLE else '❌ 不可用'}
+"""
+        messagebox.showinfo("关于", about_text)
+
+    def quick_fill_title(self):
+        """Quick fill title with templates"""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("选择标题模板")
+        dialog.geometry("500x400")
+        dialog.transient(self)
+
+        # Center dialog
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (500 // 2)
+        y = (dialog.winfo_screenheight() // 2) - (400 // 2)
+        dialog.geometry(f"500x400+{x}+{y}")
+
+        # Title
+        ctk.CTkLabel(
+            dialog,
+            text="选择或编辑标题模板",
+            font=ctk.CTkFont(size=18, weight="bold")
+        ).pack(pady=20)
+
+        # Template list
+        current_time = datetime.now()
+        suggestions = [
+            f"{current_time.strftime('%Y年%m月')} 设备维修检查报告",
+            f"{current_time.strftime('%Y-%m-%d')} 维修作业报告",
+            "设备保养维护记录",
+            "故障排查维修报告",
+            "定期检修报告"
+        ]
+
+        list_frame = ctk.CTkFrame(dialog)
+        list_frame.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+
+        listbox = tk.Listbox(
+            list_frame,
+            font=('Microsoft YaHei', 11),
+            bg='white',
+            selectmode=tk.SINGLE,
+            activestyle='dotbox'
+        )
+        listbox.pack(fill="both", expand=True, padx=5, pady=5)
+
+        for s in suggestions:
+            listbox.insert(tk.END, s)
+        listbox.selection_set(0)
+
+        # Custom entry
+        custom_frame = ctk.CTkFrame(dialog)
+        custom_frame.pack(fill="x", padx=20, pady=10)
+
+        ctk.CTkLabel(
+            custom_frame,
+            text="或自定义：",
+            font=ctk.CTkFont(size=12)
+        ).pack(anchor="w", pady=(0, 5))
+
+        custom_entry = ctk.CTkEntry(
+            custom_frame,
+            placeholder_text="输入自定义标题...",
+            height=36,
+            corner_radius=8
+        )
+        custom_entry.pack(fill="x")
+
+        # Buttons
+        btn_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=20, pady=(0, 20))
+
+        def apply_title():
+            sel = listbox.curselection()
+            if sel:
+                self.project_title_var.set(suggestions[sel[0]])
+            elif custom_entry.get().strip():
+                self.project_title_var.set(custom_entry.get().strip())
+            dialog.destroy()
+            self.set_status("✓ 标题已应用")
+
+        ctk.CTkButton(
+            btn_frame,
+            text="取消",
+            command=dialog.destroy,
+            height=36,
+            corner_radius=8,
+            fg_color=self.colors['bg_tertiary'],
+            hover_color=self.colors['border']
+        ).pack(side="right", padx=5)
+
+        ctk.CTkButton(
+            btn_frame,
+            text="确定",
+            command=apply_title,
+            height=36,
+            corner_radius=8,
+            fg_color=self.colors['accent'],
+            hover_color=self.colors['accent_hover']
+        ).pack(side="right")
+
+        # Bind double-click and Enter
+        listbox.bind('<Double-Button-1>', lambda e: apply_title())
+        dialog.bind('<Return>', lambda e: apply_title())
+        dialog.bind('<Escape>', lambda e: dialog.destroy())
+
+    def move_item_up(self):
+        """Move selected item up"""
+        if self.selected_item_index is None:
+            messagebox.showwarning("提示", "请先选择一个项目")
+            return
+
+        idx = self.selected_item_index
+        if idx > 0:
+            self.items[idx], self.items[idx-1] = self.items[idx-1], self.items[idx]
+            self.selected_item_index = idx - 1
+            self.refresh_item_list()
+            self.set_status("✓ 项目已上移")
+        else:
+            self.set_status("已经是第一个项目")
+
+    def move_item_down(self):
+        """Move selected item down"""
+        if self.selected_item_index is None:
+            messagebox.showwarning("提示", "请先选择一个项目")
+            return
+
+        idx = self.selected_item_index
+        if idx < len(self.items) - 1:
+            self.items[idx], self.items[idx+1] = self.items[idx+1], self.items[idx]
+            self.selected_item_index = idx + 1
+            self.refresh_item_list()
+            self.set_status("✓ 项目已下移")
+        else:
+            self.set_status("已经是最后一个项目")
 
 
 def main():
