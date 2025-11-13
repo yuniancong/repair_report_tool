@@ -1,0 +1,16 @@
+# 维修单工具 Modern Edition - Dependencies
+
+# Core UI framework
+customtkinter>=5.2.0
+
+# Image processing
+Pillow>=9.0.0
+
+# Excel export (optional)
+openpyxl>=3.0.0
+
+# PDF export (optional)
+reportlab>=3.6.0
+
+# Drag and drop support (optional, may require system libraries)
+tkinterdnd2>=0.3.0
