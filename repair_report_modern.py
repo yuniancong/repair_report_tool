@@ -542,12 +542,16 @@ class ModernRepairTool(ctk.CTk):
                     import traceback
                     traceback.print_exc()
 
+            # Register the handler and get the Tcl command name
+            handler_cmd = self.register(on_drop_handler)
+            self._log_debug(f"✓ 注册 Python 回调，Tcl 命令: {handler_cmd}")
+
             # Use a simpler Tcl binding that stores data and calls Python
-            # Avoid using %# and other problematic substitutions
+            # Must register handler BEFORE using it in Tcl script
             self.tk.eval(f'''
                 bind {self._w} <<Drop>> {{
                     set ::drop_data %D
-                    after idle {self.register(on_drop_handler)}
+                    after idle {handler_cmd}
                     return copy
                 }}
                 bind {self._w} <<DropEnter>> {{
