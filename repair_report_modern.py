@@ -84,6 +84,10 @@ class ModernRepairTool(ctk.CTk):
         self.image_cache = {}
         self.thumbnail_cache = {}
 
+        # Debug logs
+        self.debug_logs = []
+        self.max_debug_logs = 500
+
         # Color scheme - Light and transparent
         self.colors = {
             'bg_primary': '#F8F9FA',      # Light gray background
@@ -512,51 +516,56 @@ class ModernRepairTool(ctk.CTk):
         try:
             # Load the tkdnd package
             self.tk.eval('package require tkdnd')
+            self._log_debug("✓ tkdnd 包已加载")
 
-            # Register the main window as a drop target
-            # Use the low-level Tcl interface to set up DnD
-            self.tk.call('::tkdnd::drop_target', 'register', self._w, DND_FILES)
+            # Manually add drop_target_register and dnd_bind methods
+            # This makes CustomTkinter behave like TkinterDnD.Tk
+            def drop_target_register(*args):
+                """Register a widget as a drop target"""
+                try:
+                    # args[0] is self (the window), args[1:] are the DND types
+                    self.tk.call('::tkdnd::drop_target', 'register', self._w, *args[1:])
+                    self._log_debug(f"✓ 注册拖拽目标: {self._w}")
+                except Exception as e:
+                    self._log_debug(f"✗ 注册拖拽目标失败: {e}")
+                    raise
 
-            # Create a Python wrapper for the drop event
-            def drop_enter(event):
-                return 'copy'
+            def dnd_bind(sequence, func, add=None):
+                """Bind a DND event to a function"""
+                try:
+                    # Use Python's native bind method
+                    if add:
+                        self.bind(sequence, func, add)
+                    else:
+                        self.bind(sequence, func)
+                    self._log_debug(f"✓ 绑定事件: {sequence}")
+                except Exception as e:
+                    self._log_debug(f"✗ 绑定事件失败: {e}")
+                    raise
 
-            def drop_position(event):
-                return 'copy'
+            # Attach these methods to the instance
+            self.drop_target_register = drop_target_register
+            self.dnd_bind = dnd_bind
 
-            def drop_leave(event):
-                return
+            # Register the window for file drops
+            self.drop_target_register(DND_FILES)
 
-            # Bind the drop event handler
-            self.tk.call('bind', self._w, '<<DropEnter>>', self.register(drop_enter), '%A')
-            self.tk.call('bind', self._w, '<<DropPosition>>', self.register(drop_position), '%A')
-            self.tk.call('bind', self._w, '<<DropLeave>>', self.register(drop_leave))
-            self.tk.call('bind', self._w, '<<Drop>>', self.register(self._drop_handler), '%D')
+            # Bind the drop event
+            self.dnd_bind('<<Drop>>', self.on_drop, '+')
+            self.dnd_bind('<<DropEnter>>', lambda e: 'copy', '+')
+            self.dnd_bind('<<DropPosition>>', lambda e: 'copy', '+')
+            self.dnd_bind('<<DropLeave>>', lambda e: None, '+')
 
             # Also register on specific widgets after they're created
             self.after(200, self._register_widget_drops)
 
             print("✅ 拖拽功能设置成功")
+            self._log_debug("✅ 拖拽功能完全初始化")
         except Exception as e:
             print(f"⚠️ 拖拽功能设置失败: {e}")
+            self._log_debug(f"⚠️ 拖拽功能设置失败: {e}")
             import traceback
             traceback.print_exc()
-
-    def _drop_handler(self, data):
-        """Low-level drop handler called from Tcl"""
-        # Create an event-like object with the data
-        class DropEvent:
-            def __init__(self, data):
-                self.data = data
-
-        try:
-            self.on_drop(DropEvent(data))
-            return 'copy'
-        except Exception as e:
-            print(f"拖拽处理异常: {e}")
-            import traceback
-            traceback.print_exc()
-            return 'none'
 
     def _register_widget_drops(self):
         """Register drop on specific widgets after they're created"""
@@ -568,11 +577,12 @@ class ModernRepairTool(ctk.CTk):
                     widget_path = str(widget)
                     # Register using the low-level Tcl interface
                     self.tk.call('::tkdnd::drop_target', 'register', widget_path, DND_FILES)
-                    # Bind the drop handler
-                    self.tk.call('bind', widget_path, '<<Drop>>', self.register(self._drop_handler), '%D')
+                    # Bind the drop event using Python's bind
+                    widget.bind('<<Drop>>', self.on_drop, '+')
+                    self._log_debug(f"✓ 注册 widget 拖拽: {widget_path}")
                     return True
                 except Exception as e:
-                    print(f"  跳过 widget {widget}: {e}")
+                    self._log_debug(f"✗ 跳过 widget {widget}: {e}")
                     return False
 
             # Try to register on the main frame widgets
@@ -602,8 +612,10 @@ class ModernRepairTool(ctk.CTk):
 
             if success_count > 0:
                 print(f"✅ 成功注册 {success_count} 个拖拽区域")
+                self._log_debug(f"✅ 成功注册 {success_count} 个拖拽区域")
         except Exception as e:
             print(f"⚠️ Widget 拖拽注册失败: {e}")
+            self._log_debug(f"⚠️ Widget 拖拽注册失败: {e}")
             import traceback
             traceback.print_exc()
 
@@ -615,15 +627,19 @@ class ModernRepairTool(ctk.CTk):
         try:
             raw_data = event.data or ""
             print(f"拖拽原始数据: {raw_data}")
+            self._log_debug(f"📥 拖拽事件触发，原始数据: {raw_data}")
 
             # Parse file paths
             files = self._split_dnd_paths(raw_data)
+            self._log_debug(f"📄 解析到 {len(files)} 个文件路径")
 
             # Filter for image files
             exts = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp')
             image_files = [fp for fp in files if os.path.exists(fp) and fp.lower().endswith(exts)]
+            self._log_debug(f"🖼️ 筛选到 {len(image_files)} 个有效图片文件")
 
             if not image_files:
+                self._log_debug("⚠️ 未找到有效的图片文件")
                 messagebox.showwarning("提示", "未找到有效的图片文件")
                 return
 
@@ -638,7 +654,9 @@ class ModernRepairTool(ctk.CTk):
                         self.display_item_images(self.selected_item_index)
                         self.update_stats()
                         self.set_status(f"✓ 已添加图片到项目 {self.selected_item_index + 1}")
+                        self._log_debug(f"✅ 成功添加图片到项目 {self.selected_item_index + 1}")
                     else:
+                        self._log_debug("⚠️ 图片已存在")
                         messagebox.showinfo("提示", "该图片已存在")
                 else:
                     # No item selected, ask user
@@ -1321,6 +1339,111 @@ class ModernRepairTool(ctk.CTk):
         self.status_label.configure(text=message)
         self.update_idletasks()
 
+    def _log_debug(self, message):
+        """Add a debug log message with timestamp"""
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        log_entry = f"[{timestamp}] {message}"
+        self.debug_logs.append(log_entry)
+
+        # Keep only the most recent logs
+        if len(self.debug_logs) > self.max_debug_logs:
+            self.debug_logs = self.debug_logs[-self.max_debug_logs:]
+
+        # Also print to console for immediate feedback
+        print(log_entry)
+
+    def show_debug_logs(self):
+        """Show debug logs window"""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Debug Logs")
+        dialog.geometry("900x600")
+        dialog.transient(self)
+
+        # Center dialog
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (450)
+        y = (dialog.winfo_screenheight() // 2) - (300)
+        dialog.geometry(f"900x600+{x}+{y}")
+
+        # Title
+        ctk.CTkLabel(
+            dialog,
+            text="🐛 Debug Logs",
+            font=ctk.CTkFont(size=20, weight="bold")
+        ).pack(pady=10)
+
+        # Buttons frame
+        btn_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=20, pady=5)
+
+        def refresh_logs():
+            """Refresh the log display"""
+            text_widget.configure(state="normal")
+            text_widget.delete("1.0", "end")
+            for log in self.debug_logs:
+                text_widget.insert("end", log + "\n")
+            text_widget.configure(state="disabled")
+            text_widget.see("end")
+
+        def clear_logs():
+            """Clear all logs"""
+            self.debug_logs.clear()
+            refresh_logs()
+
+        def copy_logs():
+            """Copy logs to clipboard"""
+            logs_text = "\n".join(self.debug_logs)
+            self.clipboard_clear()
+            self.clipboard_append(logs_text)
+            messagebox.showinfo("已复制", "日志已复制到剪贴板")
+
+        ctk.CTkButton(
+            btn_frame,
+            text="🔄 刷新",
+            command=refresh_logs,
+            width=100
+        ).pack(side="left", padx=5)
+
+        ctk.CTkButton(
+            btn_frame,
+            text="🗑️ 清空",
+            command=clear_logs,
+            width=100
+        ).pack(side="left", padx=5)
+
+        ctk.CTkButton(
+            btn_frame,
+            text="📋 复制",
+            command=copy_logs,
+            width=100
+        ).pack(side="left", padx=5)
+
+        # Log text area with scrollbar
+        text_frame = ctk.CTkFrame(dialog)
+        text_frame.pack(fill="both", expand=True, padx=20, pady=10)
+
+        text_widget = scrolledtext.ScrolledText(
+            text_frame,
+            wrap="word",
+            font=("Courier", 10),
+            bg=self.colors['bg_secondary'],
+            fg=self.colors['text_primary'],
+            state="disabled"
+        )
+        text_widget.pack(fill="both", expand=True)
+
+        # Initial load
+        refresh_logs()
+
+        # Auto-refresh every 2 seconds
+        def auto_refresh():
+            if dialog.winfo_exists():
+                refresh_logs()
+                dialog.after(2000, auto_refresh)
+
+        auto_refresh()
+
     def show_settings(self):
         """Show settings dialog"""
         dialog = ctk.CTkToplevel(self)
@@ -1808,6 +1931,8 @@ class ModernRepairTool(ctk.CTk):
         menubar.add_cascade(label="帮助", menu=help_menu)
         help_menu.add_command(label="使用说明", command=self.show_help)
         help_menu.add_command(label="关于", command=self.show_about)
+        help_menu.add_separator()
+        help_menu.add_command(label="Debug Logs", command=self.show_debug_logs, accelerator="Ctrl+D")
 
     def bind_shortcuts(self):
         """Bind keyboard shortcuts"""
@@ -1818,6 +1943,7 @@ class ModernRepairTool(ctk.CTk):
         self.bind('<Control-p>', lambda e: self.export_pdf())
         self.bind('<Control-a>', lambda e: self.add_item())
         self.bind('<Control-i>', lambda e: self.batch_add_images())
+        self.bind('<Control-d>', lambda e: self.show_debug_logs())
         self.bind('<Delete>', lambda e: self.delete_selected_item())
         self.bind('<F5>', lambda e: self.refresh_display())
 
