@@ -522,57 +522,45 @@ class ModernRepairTool(ctk.CTk):
             self.tk.call('::tkdnd::drop_target', 'register', self._w, DND_FILES)
             self._log_debug(f"✓ 注册拖拽目标: {self._w}")
 
-            # Create Python callbacks that will be called from Tcl
-            # Note: All args come as strings from Tcl, we use *args to accept any number
-            def on_drop_wrapper(data):
-                """Wrapper for drop event that gets called from Tcl"""
-                self._log_debug(f"🎯 Drop wrapper 被调用: {data}")
-                # Create a mock event object
-                class DropEvent:
-                    def __init__(self, data):
-                        self.data = data
-                self.on_drop(DropEvent(data))
-                return 'copy'
+            # Store drop data in a Tcl variable that Python can read
+            self.tk.setvar('drop_data', '')
 
-            def on_drop_enter(*args):
-                """Wrapper for drop enter event"""
-                self._log_debug(f"👋 Drop Enter: args={args}")
-                return 'copy'
+            # Create Python callback for drop event
+            def on_drop_handler():
+                """Handler that gets called after Tcl stores the drop data"""
+                try:
+                    data = self.tk.getvar('drop_data')
+                    self._log_debug(f"🎯 Drop handler 被调用，数据: {data}")
+                    if data:
+                        # Create a mock event object
+                        class DropEvent:
+                            def __init__(self, data):
+                                self.data = data
+                        self.on_drop(DropEvent(data))
+                except Exception as e:
+                    self._log_debug(f"❌ Drop handler 异常: {e}")
+                    import traceback
+                    traceback.print_exc()
 
-            def on_drop_position(*args):
-                """Wrapper for drop position event"""
-                self._log_debug(f"📍 Drop Position: args={args}")
-                return 'copy'
-
-            def on_drop_leave(*args):
-                """Wrapper for drop leave event"""
-                self._log_debug(f"👋 Drop Leave: args={args}")
-                return None
-
-            # Register the Python callbacks with Tcl (no type arguments)
-            # register() only accepts (func, subst=None, needcleanup=1)
-            drop_cmd = self.register(on_drop_wrapper)
-            drop_enter_cmd = self.register(on_drop_enter)
-            drop_position_cmd = self.register(on_drop_position)
-            drop_leave_cmd = self.register(on_drop_leave)
-
-            # Use Tcl script to bind the events
-            # This is more reliable than Python's bind() on macOS
+            # Use a simpler Tcl binding that stores data and calls Python
+            # Avoid using %# and other problematic substitutions
             self.tk.eval(f'''
                 bind {self._w} <<Drop>> {{
-                    {drop_cmd} %D
+                    set ::drop_data %D
+                    after idle {self.register(on_drop_handler)}
+                    return copy
                 }}
                 bind {self._w} <<DropEnter>> {{
-                    {drop_enter_cmd} %A %t
+                    return copy
                 }}
                 bind {self._w} <<DropPosition>> {{
-                    {drop_position_cmd} %X %Y %A
+                    return copy
                 }}
                 bind {self._w} <<DropLeave>> {{
-                    {drop_leave_cmd}
+                    # Do nothing
                 }}
             ''')
-            self._log_debug("✓ 使用 Tcl 脚本绑定所有拖拽事件")
+            self._log_debug("✓ 使用简化的 Tcl 绑定（避免事件替换冲突）")
 
             # Also register on specific widgets after they're created
             self.after(200, self._register_widget_drops)
