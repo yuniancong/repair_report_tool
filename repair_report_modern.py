@@ -523,6 +523,7 @@ class ModernRepairTool(ctk.CTk):
             self._log_debug(f"✓ 注册拖拽目标: {self._w}")
 
             # Create Python callbacks that will be called from Tcl
+            # Note: All args come as strings from Tcl, we use *args to accept any number
             def on_drop_wrapper(data):
                 """Wrapper for drop event that gets called from Tcl"""
                 self._log_debug(f"🎯 Drop wrapper 被调用: {data}")
@@ -533,25 +534,26 @@ class ModernRepairTool(ctk.CTk):
                 self.on_drop(DropEvent(data))
                 return 'copy'
 
-            def on_drop_enter(action, types):
+            def on_drop_enter(*args):
                 """Wrapper for drop enter event"""
-                self._log_debug(f"👋 Drop Enter: action={action}, types={types}")
+                self._log_debug(f"👋 Drop Enter: args={args}")
                 return 'copy'
 
-            def on_drop_position(x, y, action):
+            def on_drop_position(*args):
                 """Wrapper for drop position event"""
-                self._log_debug(f"📍 Drop Position: x={x}, y={y}, action={action}")
+                self._log_debug(f"📍 Drop Position: args={args}")
                 return 'copy'
 
-            def on_drop_leave():
+            def on_drop_leave(*args):
                 """Wrapper for drop leave event"""
-                self._log_debug(f"👋 Drop Leave")
+                self._log_debug(f"👋 Drop Leave: args={args}")
                 return None
 
-            # Register the Python callbacks with Tcl
-            drop_cmd = self.register(on_drop_wrapper, str)
-            drop_enter_cmd = self.register(on_drop_enter, str, str)
-            drop_position_cmd = self.register(on_drop_position, int, int, str)
+            # Register the Python callbacks with Tcl (no type arguments)
+            # register() only accepts (func, subst=None, needcleanup=1)
+            drop_cmd = self.register(on_drop_wrapper)
+            drop_enter_cmd = self.register(on_drop_enter)
+            drop_position_cmd = self.register(on_drop_position)
             drop_leave_cmd = self.register(on_drop_leave)
 
             # Use Tcl script to bind the events
