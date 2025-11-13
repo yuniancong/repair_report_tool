@@ -544,6 +544,7 @@ class ModernRepairTool(ctk.CTk):
 
             # Register the handler and get the Tcl command name
             handler_cmd = self.register(on_drop_handler)
+            self._drop_handler_cmd = handler_cmd  # Save for widget registration
             self._log_debug(f"✓ 注册 Python 回调，Tcl 命令: {handler_cmd}")
 
             # Use a simpler Tcl binding that stores data and calls Python
@@ -580,6 +581,13 @@ class ModernRepairTool(ctk.CTk):
     def _register_widget_drops(self):
         """Register drop on specific widgets after they're created"""
         try:
+            # Get the handler command from main window setup
+            if not hasattr(self, '_drop_handler_cmd'):
+                self._log_debug("⚠️ 主窗口拖拽未初始化，跳过 widget 注册")
+                return
+
+            handler_cmd = self._drop_handler_cmd
+
             # Create helper functions for widget drop registration
             def register_widget_drop(widget):
                 try:
@@ -587,8 +595,17 @@ class ModernRepairTool(ctk.CTk):
                     widget_path = str(widget)
                     # Register using the low-level Tcl interface
                     self.tk.call('::tkdnd::drop_target', 'register', widget_path, DND_FILES)
-                    # Bind the drop event using Python's bind
-                    widget.bind('<<Drop>>', self.on_drop, '+')
+
+                    # Use Tcl script binding (same as main window) to avoid %# error
+                    # Reuse the same drop_data variable and handler
+                    self.tk.eval(f'''
+                        bind {widget_path} <<Drop>> {{
+                            set ::drop_data %D
+                            after idle {handler_cmd}
+                            return copy
+                        }}
+                    ''')
+
                     self._log_debug(f"✓ 注册 widget 拖拽: {widget_path}")
                     return True
                 except Exception as e:
