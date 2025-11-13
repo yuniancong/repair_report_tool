@@ -510,29 +510,15 @@ class ModernRepairTool(ctk.CTk):
             return
 
         try:
-            # Manually add TkinterDnD functionality to the CustomTkinter window
-            # This is a workaround since CustomTkinter doesn't inherit from TkinterDnD.Tk
-            from tkinterdnd2 import _dnd_init
-
-            # Initialize DnD for this window
-            TkinterDnD.DnDWrapper = TkinterDnD.Tk
-            # Patch the window to support DnD
+            # Load the tkdnd package
             self.tk.eval('package require tkdnd')
 
-            # Add the necessary methods to our window
-            def drop_target_register(widget, *args):
-                widget.tk.call('dnd', 'bindtarget', widget, *args)
+            # Register drop target for the main window
+            # Use tk.call to interact directly with tkdnd
+            self.tk.call('dnd', 'bindtarget', self._w, DND_FILES)
 
-            def dnd_bind(widget, sequence, func, add=''):
-                widget.bind(sequence, func, add)
-
-            # Monkey-patch these methods onto our window
-            self.drop_target_register = lambda *args: drop_target_register(self, *args)
-            self.dnd_bind = lambda *args, **kw: dnd_bind(self, *args, **kw)
-
-            # Register the main window for drag and drop
-            self.drop_target_register(DND_FILES)
-            self.dnd_bind('<<Drop>>', self.on_drop)
+            # Bind the drop event
+            self.bind('<<Drop>>', self.on_drop, add='+')
 
             # Also register on specific widgets after they're created
             self.after(200, self._register_widget_drops)
@@ -549,10 +535,13 @@ class ModernRepairTool(ctk.CTk):
             # Create helper functions for widget drop registration
             def register_widget_drop(widget):
                 try:
-                    widget.tk.call('dnd', 'bindtarget', widget, DND_FILES)
+                    # Get the widget's window path name
+                    widget_path = str(widget)
+                    self.tk.call('dnd', 'bindtarget', widget_path, DND_FILES)
                     widget.bind('<<Drop>>', self.on_drop, add='+')
                     return True
-                except:
+                except Exception as e:
+                    print(f"  跳过 widget {widget}: {e}")
                     return False
 
             # Try to register on the main frame widgets
@@ -574,11 +563,14 @@ class ModernRepairTool(ctk.CTk):
 
                 # Also try to register internal frames
                 if hasattr(widget, '_canvas'):
-                    register_widget_drop(widget._canvas)
+                    if register_widget_drop(widget._canvas):
+                        success_count += 1
                 if hasattr(widget, '_parent_canvas'):
-                    register_widget_drop(widget._parent_canvas)
+                    if register_widget_drop(widget._parent_canvas):
+                        success_count += 1
 
-            print(f"✅ 成功注册 {success_count} 个拖拽区域")
+            if success_count > 0:
+                print(f"✅ 成功注册 {success_count} 个拖拽区域")
         except Exception as e:
             print(f"⚠️ Widget 拖拽注册失败: {e}")
             import traceback
