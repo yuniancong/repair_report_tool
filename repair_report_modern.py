@@ -508,9 +508,133 @@ class ModernRepairTool(ctk.CTk):
         """Setup drag and drop if available"""
         if not DRAG_DROP_AVAILABLE:
             return
-        # Note: CustomTkinter doesn't directly support TkinterDnD
-        # This would need additional implementation
-        pass
+
+        try:
+            # CustomTkinter is built on top of tkinter
+            # We need to manually initialize TkDND for the window
+            from tkinterdnd2 import _dnd_init
+
+            # Initialize DnD for the root window
+            try:
+                _dnd_init(self, self)
+            except:
+                # Alternative: try using the TkinterDnD method directly
+                pass
+
+            # Try to register drag and drop
+            # For CustomTkinter, we need to use the underlying tk methods
+            if hasattr(self, 'drop_target_register'):
+                self.drop_target_register(DND_FILES)
+                self.dnd_bind('<<Drop>>', self.on_drop)
+            else:
+                # Manual DnD setup for CustomTkinter
+                self.tk.call('dnd', 'bindtarget', str(self), DND_FILES,
+                            '<<Drop>>', self.register(self._dnd_drop_wrapper))
+
+            # Also try to register on the image gallery's underlying widget
+            # Wait for the widget to be created
+            self.after(100, self._register_image_gallery_drop)
+
+            print("✅ 拖拽功能设置成功")
+        except Exception as e:
+            print(f"⚠️ 拖拽功能设置失败: {e}")
+            import traceback
+            traceback.print_exc()
+            # Don't fail completely, just disable drag-drop
+
+    def _dnd_drop_wrapper(self, *args):
+        """Wrapper for DnD drop event"""
+        # Create a simple event object
+        class DropEvent:
+            def __init__(self, data):
+                self.data = data
+
+        if args:
+            event = DropEvent(args[0] if args else "")
+            self.on_drop(event)
+
+    def _register_image_gallery_drop(self):
+        """Register drop on image gallery after it's created"""
+        try:
+            if hasattr(self.image_gallery, 'drop_target_register'):
+                self.image_gallery.drop_target_register(DND_FILES)
+                self.image_gallery.dnd_bind('<<Drop>>', self.on_drop)
+            else:
+                # Try manual registration
+                gallery_widget = self.image_gallery
+                self.tk.call('dnd', 'bindtarget', str(gallery_widget), DND_FILES,
+                           '<<Drop>>', self.register(self._dnd_drop_wrapper))
+        except Exception as e:
+            pass  # Silently fail
+
+    def on_drop(self, event):
+        """Handle drag and drop of image files"""
+        if not DRAG_DROP_AVAILABLE:
+            return
+
+        try:
+            raw_data = event.data or ""
+            print(f"拖拽原始数据: {raw_data}")
+
+            # Parse file paths
+            files = self._split_dnd_paths(raw_data)
+
+            # Filter for image files
+            exts = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp')
+            image_files = [fp for fp in files if os.path.exists(fp) and fp.lower().endswith(exts)]
+
+            if not image_files:
+                messagebox.showwarning("提示", "未找到有效的图片文件")
+                return
+
+            # Handle single or multiple images
+            if len(image_files) == 1:
+                # Add to current selected item
+                if self.selected_item_index is not None and 0 <= self.selected_item_index < len(self.items):
+                    img_path = image_files[0]
+                    if img_path not in self.items[self.selected_item_index]['images']:
+                        self.items[self.selected_item_index]['images'].append(img_path)
+                        self.refresh_item_list()
+                        self.display_item_images(self.selected_item_index)
+                        self.update_stats()
+                        self.set_status(f"✓ 已添加图片到项目 {self.selected_item_index + 1}")
+                    else:
+                        messagebox.showinfo("提示", "该图片已存在")
+                else:
+                    # No item selected, ask user
+                    if messagebox.askyesno("提示", "当前没有选中项目\n是否创建新项目并添加图片？"):
+                        self.add_item()
+                        if self.selected_item_index is not None:
+                            self.items[self.selected_item_index]['images'].append(image_files[0])
+                            self.refresh_item_list()
+                            self.display_item_images(self.selected_item_index)
+                            self.update_stats()
+            else:
+                # Multiple images, show batch assign dialog
+                self.show_batch_assign_dialog(image_files)
+
+        except Exception as e:
+            messagebox.showerror("拖拽错误", f"拖拽处理失败: {str(e)}")
+            print(f"拖拽处理异常: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _split_dnd_paths(self, raw):
+        """Split drag-and-drop file paths (handles spaces and special chars)"""
+        try:
+            # Try tkinter's built-in splitlist first
+            return [p.strip().strip('"').strip("'") for p in self.tk.splitlist(raw)]
+        except Exception:
+            # Fallback: manual parsing for paths with spaces
+            # Handles formats like: {path1} {path2} or "path1" "path2"
+            candidates = re.findall(r'\{([^}]*)\}|"([^"]*)"|\'([^\']*)\'|([^ \t\r\n]+)', raw or "")
+            cleaned = []
+            for groups in candidates:
+                # groups is a tuple of matched groups, find the non-empty one
+                path = next((g for g in groups if g), None)
+                if path:
+                    cleaned.append(path.strip())
+            return cleaned
 
     def add_item(self):
         """Add new repair item"""
@@ -521,12 +645,16 @@ class ModernRepairTool(ctk.CTk):
             'images': []
         }
         self.items.append(new_item)
-        self.refresh_item_list()
+
+        # Only create the new card instead of refreshing all
+        idx = len(self.items) - 1
+        self.create_item_card(idx, new_item)
+
         self.update_stats()
         self.set_status(f"✓ 已添加新项目")
 
-        # Select the new item
-        self.select_item(len(self.items) - 1)
+        # Select the new item (optimized to not refresh all cards)
+        self.select_item_optimized(idx)
 
     def refresh_item_list(self):
         """Refresh the sidebar item list"""
@@ -540,17 +668,19 @@ class ModernRepairTool(ctk.CTk):
 
     def create_item_card(self, idx, item):
         """Create a modern card for an item"""
+        # Determine if this card is selected
+        is_selected = (idx == self.selected_item_index)
+        border_width = 3 if is_selected else 2
+        border_color = self.colors['accent'] if is_selected else self.colors['border']
+
         card = ctk.CTkFrame(
             self.items_scroll,
             fg_color=self.colors['bg_tertiary'],
             corner_radius=12,
-            border_width=2,
-            border_color=self.colors['border']
+            border_width=border_width,
+            border_color=border_color
         )
         card.pack(fill="x", pady=8)
-
-        # Make card clickable
-        card.bind("<Button-1>", lambda e: self.select_item(idx))
 
         # Card content
         content = ctk.CTkFrame(card, fg_color="transparent")
@@ -606,6 +736,24 @@ class ModernRepairTool(ctk.CTk):
         )
         del_btn.pack(side="right")
 
+        # Bind click event to all widgets except delete button
+        # This ensures clicking anywhere on the card selects the item
+        click_handler = lambda e, i=idx: self.select_item_optimized(i)
+        self._bind_click_recursive(card, click_handler, exclude=[del_btn])
+
+    def _bind_click_recursive(self, widget, handler, exclude=None):
+        """Recursively bind click event to widget and all children"""
+        if exclude is None:
+            exclude = []
+
+        # Don't bind to excluded widgets (like delete button)
+        if widget not in exclude:
+            widget.bind("<Button-1>", handler, add="+")
+
+            # Recursively bind to all children
+            for child in widget.winfo_children():
+                self._bind_click_recursive(child, handler, exclude)
+
     def select_item(self, idx):
         """Select an item and display its images"""
         if 0 <= idx < len(self.items):
@@ -621,6 +769,32 @@ class ModernRepairTool(ctk.CTk):
 
             # Update card highlights
             self.refresh_item_list()
+
+    def select_item_optimized(self, idx):
+        """Select an item without refreshing all cards (optimized)"""
+        if 0 <= idx < len(self.items):
+            self.selected_item_index = idx
+            item = self.items[idx]
+
+            # Update description
+            self.description_entry.delete(0, "end")
+            self.description_entry.insert(0, item['description'])
+
+            # Display images
+            self.display_item_images(idx)
+
+            # Update only the card highlights without rebuilding
+            self.update_card_highlights()
+
+    def update_card_highlights(self):
+        """Update card highlights without rebuilding all cards"""
+        for idx, widget in enumerate(self.items_scroll.winfo_children()):
+            if idx < len(self.items):
+                # Update border color based on selection
+                if idx == self.selected_item_index:
+                    widget.configure(border_color=self.colors['accent'], border_width=3)
+                else:
+                    widget.configure(border_color=self.colors['border'], border_width=2)
 
     def delete_item(self, idx):
         """Delete an item"""
