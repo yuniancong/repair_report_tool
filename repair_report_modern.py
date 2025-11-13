@@ -513,12 +513,25 @@ class ModernRepairTool(ctk.CTk):
             # Load the tkdnd package
             self.tk.eval('package require tkdnd')
 
-            # Register drop target for the main window
-            # Use tk.call to interact directly with tkdnd
-            self.tk.call('dnd', 'bindtarget', self._w, DND_FILES)
+            # Register the main window as a drop target
+            # Use the low-level Tcl interface to set up DnD
+            self.tk.call('::tkdnd::drop_target', 'register', self._w, DND_FILES)
 
-            # Bind the drop event
-            self.bind('<<Drop>>', self.on_drop, add='+')
+            # Create a Python wrapper for the drop event
+            def drop_enter(event):
+                return 'copy'
+
+            def drop_position(event):
+                return 'copy'
+
+            def drop_leave(event):
+                return
+
+            # Bind the drop event handler
+            self.tk.call('bind', self._w, '<<DropEnter>>', self.register(drop_enter), '%A')
+            self.tk.call('bind', self._w, '<<DropPosition>>', self.register(drop_position), '%A')
+            self.tk.call('bind', self._w, '<<DropLeave>>', self.register(drop_leave))
+            self.tk.call('bind', self._w, '<<Drop>>', self.register(self._drop_handler), '%D')
 
             # Also register on specific widgets after they're created
             self.after(200, self._register_widget_drops)
@@ -529,6 +542,22 @@ class ModernRepairTool(ctk.CTk):
             import traceback
             traceback.print_exc()
 
+    def _drop_handler(self, data):
+        """Low-level drop handler called from Tcl"""
+        # Create an event-like object with the data
+        class DropEvent:
+            def __init__(self, data):
+                self.data = data
+
+        try:
+            self.on_drop(DropEvent(data))
+            return 'copy'
+        except Exception as e:
+            print(f"拖拽处理异常: {e}")
+            import traceback
+            traceback.print_exc()
+            return 'none'
+
     def _register_widget_drops(self):
         """Register drop on specific widgets after they're created"""
         try:
@@ -537,8 +566,10 @@ class ModernRepairTool(ctk.CTk):
                 try:
                     # Get the widget's window path name
                     widget_path = str(widget)
-                    self.tk.call('dnd', 'bindtarget', widget_path, DND_FILES)
-                    widget.bind('<<Drop>>', self.on_drop, add='+')
+                    # Register using the low-level Tcl interface
+                    self.tk.call('::tkdnd::drop_target', 'register', widget_path, DND_FILES)
+                    # Bind the drop handler
+                    self.tk.call('bind', widget_path, '<<Drop>>', self.register(self._drop_handler), '%D')
                     return True
                 except Exception as e:
                     print(f"  跳过 widget {widget}: {e}")
@@ -763,6 +794,43 @@ class ModernRepairTool(ctk.CTk):
             for child in widget.winfo_children():
                 self._bind_click_recursive(child, handler, exclude)
 
+    def update_item_card_text(self, idx):
+        """Update only the text of a specific item card without rebuilding the entire list"""
+        if idx < 0 or idx >= len(self.items):
+            return
+
+        # Find the card widget in the scrollable frame
+        cards = self.items_scroll.winfo_children()
+        if idx >= len(cards):
+            return
+
+        card = cards[idx]
+        item = self.items[idx]
+
+        # Find and update the description label
+        # The structure is: card -> content -> info_frame -> desc_label
+        try:
+            content = card.winfo_children()[0]  # content frame
+            info_frame = None
+
+            # Find the info_frame (it's the one that's not a label and not a button)
+            for child in content.winfo_children():
+                if isinstance(child, ctk.CTkFrame) and child.cget('fg_color') == 'transparent':
+                    info_frame = child
+                    break
+
+            if info_frame:
+                # Update the description label (first label in info_frame)
+                for child in info_frame.winfo_children():
+                    if isinstance(child, ctk.CTkLabel):
+                        desc_text = item['description'][:30] + "..." if len(item['description']) > 30 else item['description']
+                        child.configure(text=desc_text)
+                        break
+        except Exception as e:
+            # If updating fails, fallback to full refresh
+            print(f"⚠️ 更新卡片文本失败，回退到完整刷新: {e}")
+            self.refresh_item_list()
+
     def select_item(self, idx):
         """Select an item and display its images"""
         if 0 <= idx < len(self.items):
@@ -820,7 +888,8 @@ class ModernRepairTool(ctk.CTk):
         if self.selected_item_index is not None and 0 <= self.selected_item_index < len(self.items):
             new_desc = self.description_entry.get().strip()
             self.items[self.selected_item_index]['description'] = new_desc if new_desc else f"维修项目 {self.selected_item_index + 1}"
-            self.refresh_item_list()
+            # 只更新选中项的卡片文本，不刷新整个列表，避免跳闪
+            self.update_item_card_text(self.selected_item_index)
 
     def add_images(self):
         """Add images to selected item"""
